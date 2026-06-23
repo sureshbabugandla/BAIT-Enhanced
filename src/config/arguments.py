@@ -52,6 +52,11 @@ class BAITArguments:
     conformal_alpha: float = field(default=0.0, metadata={"help": "If >0, calibrate the decision threshold to this target FPR"})
     # D: prioritized initial-token scan
     prioritize_initial_tokens: bool = field(default=True, metadata={"help": "Scan likely first tokens first, then early-stop"})
+    # D+: token-search optimization (shrink the candidate set, not just reorder)
+    optimize_token_search: bool = field(default=False, metadata={"help": "D+: shrink the initial-token search (ban impossible + low-prob first tokens) instead of only reordering. Reuses the natural first-token distribution."})
+    token_ban_word_initial_only: bool = field(default=True, metadata={"help": "D+: also ban non-word-initial sub-word tokens (safe when the target starts at a word boundary -- the universal case in the paper)."})
+    token_prob_floor: float = field(default=1e-6, metadata={"help": "D+: drop candidate first tokens whose marginal probability is below this floor."})
+    token_nucleus_p: float = field(default=0.9999, metadata={"help": "D+: keep the smallest set of first tokens reaching this cumulative probability (1.0 disables nucleus pruning)."})
     # E: clean-text baseline calibration (first-order; off by default)
     use_baseline_calibration: bool = field(default=False, metadata={"help": "Subtract a natural-language baseline from the Q-SCORE"})
 

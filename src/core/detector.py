@@ -36,6 +36,7 @@ from src.core.conformal_threshold import conformal_threshold   # C
 from src.core.baseline_calibration import baseline_adjusted_qscore  # E
 from src.eval.judge_backends import build_judge                # B
 from src.data.base import left_padding                         # D (prompt re-padding)
+from src.core.token_optimizer import build_ban_mask, plan_scan # D+ (token-search shrink)
 
 
 @dataclass
@@ -117,7 +118,7 @@ class BAIT:
         # D: scan the most promising initial tokens first, then rely on the
         # existing early-stop. Pure reordering -> never changes which backdoor
         # is found; on any error it safely keeps the original order.
-        if getattr(self, "prioritize_initial_tokens", False):
+        if getattr(self, "prioritize_initial_tokens", False) or getattr(self, "optimize_token_search", False):
             self._prioritize_dataloader()
 
         for batch_inputs in tqdm(self.dataloader, desc="Scanning data..."):
@@ -518,11 +519,21 @@ class BAIT:
 
     def _prioritize_dataloader(self) -> None:
         """
-        D: reorder the initial-token scan so the most likely first tokens are
-        evaluated first; combined with the existing early-stop this reduces scan
-        time. This is a PURE REORDERING of candidates -> it never changes which
-        backdoor would be found in a full scan. On any error it logs a warning
-        and leaves the original order untouched (safe fallback).
+        D / D+: order (and optionally SHRINK) the initial-token scan.
+
+          * optimize_token_search=False -> original D behaviour: a PURE REORDER
+            of candidates by natural first-token probability. Never changes which
+            backdoor would be found in a full scan.
+          * optimize_token_search=True  -> D+: first BAN impossible / near-zero
+            probability first tokens (token_optimizer), then order the survivors.
+            T1 (special/whitespace/punct/non-word-initial) and T4 (reorder +
+            early-stop) are verdict-preserving; T2/T3 (prob-floor / nucleus) are
+            bounded and should be chosen with audit_survival so the true backdoor
+            token always survives (audited-safe default: floor=1e-6, p=0.9999).
+
+        Reuses the natural first-token distribution `nat` (no extra forward
+        passes). On any error it logs a warning and leaves the original order
+        untouched (safe fallback).
         """
         try:
             ds = self.dataloader.dataset
@@ -539,12 +550,31 @@ class BAIT:
             attention_mask = (input_ids != self.tokenizer.eos_token_id).long().to(self.device)
             nat = self.__generate(input_ids, attention_mask).mean(dim=0).detach().cpu().numpy()
 
-            def _score(entry):
-                k = next(iter(entry.keys()))
-                return float(nat[int(k)])
+            if getattr(self, "optimize_token_search", False):
+                # D+: shrink the candidate set, then order it.
+                if getattr(self, "_ban_mask", None) is None:
+                    self._ban_mask = build_ban_mask(
+                        self.tokenizer,
+                        word_initial_only=getattr(self, "token_ban_word_initial_only", True))
+                plan = plan_scan(
+                    nat, ban_mask=self._ban_mask,
+                    prob_floor=getattr(self, "token_prob_floor", 1e-6),
+                    p=getattr(self, "token_nucleus_p", 0.9999))
+                rank = {int(t): i for i, t in enumerate(plan.order)}
+                before = len(ds.data)
+                ds.data = [e for e in ds.data if int(next(iter(e.keys()))) in rank]   # SHRINK
+                ds.data.sort(key=lambda e: rank[int(next(iter(e.keys())))])           # ORDER
+                self.logger.info(
+                    f"D+: token search {before} -> {len(ds.data)} candidates "
+                    f"({plan.reduction:.1%} pruned), ordered by first-token probability")
+            else:
+                # D: pure reorder (original behaviour).
+                def _score(entry):
+                    k = next(iter(entry.keys()))
+                    return float(nat[int(k)])
 
-            ds.data.sort(key=_score, reverse=True)
-            self.logger.info("D: prioritized initial-token scan order by natural first-token probability")
+                ds.data.sort(key=_score, reverse=True)
+                self.logger.info("D: prioritized initial-token scan order by natural first-token probability")
         except Exception as e:
             self.logger.warning(f"D: prioritization skipped ({e}); using original scan order")
 
