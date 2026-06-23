@@ -15,7 +15,12 @@ Copyright (c) [2024] [PurduePAML]
 import torch
 import os
 import json
-import ray
+try:
+    import ray
+    HAS_RAY = True
+except ImportError:
+    HAS_RAY = False
+    ray = None
 from transformers import HfArgumentParser
 from loguru import logger
 from src.config.arguments import ScanArguments
@@ -33,18 +38,20 @@ logging.get_logger("transformers").setLevel(logging.ERROR)
 seed_everything(SEED)
 
 
-@ray.remote(num_gpus=1)
 def scan_model_remote(
     model_id: str,
     model_config: Dict,
     scan_args_dict: Dict,
     run_dir: str
 ) -> Tuple[str, bool, str]:
-    """Remote function to scan a single model"""
+    """Function to scan a single model"""
     scan_args = ScanArguments(**scan_args_dict)
     scanner = BAITWrapper(model_id, model_config, scan_args, run_dir)
     success, error = scanner.scan()
     return model_id, success, error
+
+if HAS_RAY:
+    scan_model_remote_remote = ray.remote(num_gpus=1 if torch.cuda.is_available() else 0)(scan_model_remote)
 
 class Dispatcher:
     """Main scanner class that coordinates parallel scanning of multiple models"""
@@ -61,9 +68,13 @@ class Dispatcher:
 
     def _initialize_ray(self):
         """Initialize Ray and get available GPUs"""
-        ray.init(ignore_reinit_error=True)
-        self.num_gpus = ray.cluster_resources().get('GPU', 0)
-        logger.info(f"Found {self.num_gpus} available GPUs")
+        if HAS_RAY:
+            ray.init(ignore_reinit_error=True)
+            self.num_gpus = ray.cluster_resources().get('GPU', 0)
+            logger.info(f"Found {self.num_gpus} available GPUs")
+        else:
+            self.num_gpus = 0
+            logger.info("Ray is not installed. Using local sequential fallback.")
 
     def _load_model_configs(self):
         """Load model configurations from the model zoo directory"""
@@ -96,39 +107,63 @@ class Dispatcher:
         return pending_tasks
 
     def run(self) -> List[Tuple[str, bool, str]]:
-        """Run the scanning process using Ray for parallel execution"""
+        """Run the scanning process using Ray for parallel execution if available, else sequentially"""
         scan_args_dict = self._prepare_scan_args_dict()
         pending_tasks = self._get_pending_tasks()
         
-        # Launch tasks
-        tasks = [
-            scan_model_remote.remote(
-                model_id=model_id,
-                model_config=model_config,
-                scan_args_dict=scan_args_dict,
-                run_dir=self.run_dir
-            )
-            for model_id, model_config in pending_tasks
-        ]
+        if HAS_RAY:
+            # Launch tasks
+            tasks = [
+                scan_model_remote_remote.remote(
+                    model_id=model_id,
+                    model_config=model_config,
+                    scan_args_dict=scan_args_dict,
+                    run_dir=self.run_dir
+                )
+                for model_id, model_config in pending_tasks
+            ]
 
-        # Process results as they complete
-        results = []
-        while tasks:
-            done_id, tasks = ray.wait(tasks)
-            result = ray.get(done_id[0])
-            results.append(result)
-            
-            model_id, success, error = result
-            if not success:
-                logger.error(f"Error scanning model {model_id}: {error}")
-            else:
-                logger.info(f"Completed scanning model {model_id}")
+            # Process results as they complete
+            results = []
+            while tasks:
+                done_id, tasks = ray.wait(tasks)
+                result = ray.get(done_id[0])
+                results.append(result)
+                
+                model_id, success, error = result
+                if not success:
+                    logger.error(f"Error scanning model {model_id}: {error}")
+                else:
+                    logger.info(f"Completed scanning model {model_id}")
 
-        # Run evaluation if requested
-        if self.scan_args.run_eval:
-            Evaluator(self.run_dir).eval()
+            # Run evaluation if requested
+            if self.scan_args.run_eval:
+                Evaluator(self.run_dir).eval()
 
-        # Cleanup
-        ray.shutdown()
-        return results
+            # Cleanup
+            ray.shutdown()
+            return results
+        else:
+            logger.info("Running scans sequentially on local/CPU resources.")
+            results = []
+            for model_id, model_config in pending_tasks:
+                logger.info(f"Scanning model {model_id} sequentially...")
+                result = scan_model_remote(
+                    model_id=model_id,
+                    model_config=model_config,
+                    scan_args_dict=scan_args_dict,
+                    run_dir=self.run_dir
+                )
+                results.append(result)
+                success, error = result[1], result[2]
+                if not success:
+                    logger.error(f"Error scanning model {model_id}: {error}")
+                else:
+                    logger.info(f"Completed scanning model {model_id}")
+
+            # Run evaluation if requested
+            if self.scan_args.run_eval:
+                Evaluator(self.run_dir).eval()
+
+            return results
 

@@ -70,8 +70,69 @@ def parse_args():
         action="store_true",
         help="Run evaluation after scanning is complete"
     )
+    parser.add_argument(
+        "--judge-backend",
+        default="openai",
+        choices=["openai", "local", "none"],
+        help="Judge backend: openai | local | none"
+    )
+    parser.add_argument(
+        "--judge-local-model",
+        default="meta-llama/Meta-Llama-3-8B-Instruct",
+        help="HF model used when judge-backend is 'local'"
+    )
+    parser.add_argument(
+        "--use-robust-qscore",
+        action="store_true",
+        default=True,
+        help="Use bootstrap lower-bound Q-SCORE and report q_std"
+    )
+    parser.add_argument(
+        "--no-robust-qscore",
+        action="store_false",
+        dest="use_robust_qscore",
+        help="Disable bootstrap lower-bound Q-SCORE"
+    )
+    parser.add_argument(
+        "--prioritize-initial-tokens",
+        action="store_true",
+        default=True,
+        help="Scan likely first tokens first, then early-stop"
+    )
+    parser.add_argument(
+        "--no-prioritize-initial-tokens",
+        action="store_false",
+        dest="prioritize_initial_tokens",
+        help="Disable prioritizing initial tokens"
+    )
+    parser.add_argument(
+        "--use-baseline-calibration",
+        action="store_true",
+        default=False,
+        help="Subtract a natural-language baseline from the Q-SCORE"
+    )
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=5,
+        help="Number of warmup steps"
+    )
+    parser.add_argument(
+        "--full-steps",
+        type=int,
+        default=20,
+        help="Number of full steps"
+    )
+    parser.add_argument(
+        "--prompt-size",
+        type=int,
+        default=20,
+        help="Prompt size"
+    )
     
-    return parser.parse_args()
+    # Map kebab-case command line names to snake_case attribute names parsed by argparse
+    args = parser.parse_args()
+    return args
 
 def validate_args(args):
     """Validate command line arguments"""

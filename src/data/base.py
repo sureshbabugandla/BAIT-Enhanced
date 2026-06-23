@@ -33,7 +33,7 @@ import torch
 import transformers
 from torch.utils.data import ConcatDataset, Dataset, Subset, default_collate
 from tqdm import tqdm
-from transformers.tokenization_utils import PaddingStrategy, TruncationStrategy
+from transformers.tokenization_utils_base import PaddingStrategy, TruncationStrategy
 import torch.distributed as dist
 from datasets import load_dataset
 from torch.nn.utils.rnn import pad_sequence

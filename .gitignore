@@ -106,6 +106,7 @@ model_zoo/
 ##############
 /data/
 result/
+results/
 
 # Temp folder 
 ##############

@@ -60,7 +60,7 @@ def load_trojai_model(args) -> Tuple[transformers.PreTrainedModel, transformers.
         model = load_full_fine_tuned_model(model_filepath)
 
     model.eval()
-    device = torch.device(f'cuda:{args.gpu}')
+    device = torch.device(f'cuda:{args.gpu}') if torch.cuda.is_available() else torch.device('cpu')
     model = model.to(device)
     
     tokenizer_filepath = os.path.join(model_filepath, 'tokenizer')
@@ -89,7 +89,7 @@ def load_other_model(args) -> Tuple[transformers.PreTrainedModel, transformers.P
 
     handle_tokenizer_padding(tokenizer, model)
     tokenizer = handle_llama_tokenizer(tokenizer, model, base_model)
-    if getattr(args, 'adapter_path', None) is not None:
+    if getattr(args, 'adapter_path', None) is not None and os.path.exists(os.path.join(args.adapter_path, "adapter_config.json")):
         model = load_adapter(model, args)
     
     model.eval()
@@ -169,21 +169,34 @@ def load_default_model(base_model: str, cache_dir: str, gpu: int) -> Tuple[trans
         tuple: A tuple containing the loaded model and tokenizer.
     """
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        base_model, 
-        cache_dir=cache_dir, 
-        local_files_only=True,
-        padding_side="left",
-        truncation_side='left'
-    )
+    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+    device_map = "auto" if torch.cuda.is_available() else None
 
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            base_model, 
+            cache_dir=cache_dir, 
+            local_files_only=True,
+            padding_side="left",
+            truncation_side='left'
+        )
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(
+            base_model, 
+            cache_dir=cache_dir, 
+            local_files_only=False,
+            padding_side="left",
+            truncation_side='left'
+        )
 
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
         cache_dir=cache_dir,
-        torch_dtype=torch.float16,
-        device_map="auto"
+        torch_dtype=dtype,
+        device_map=device_map
     )
+    if not torch.cuda.is_available():
+        model = model.to("cpu")
     return model, tokenizer
 
 def handle_tokenizer_padding(tokenizer: transformers.PreTrainedTokenizer, model: transformers.PreTrainedModel):

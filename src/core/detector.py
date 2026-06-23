@@ -737,6 +737,10 @@ class BAITWrapper:
     def _initialize_arguments(self) -> Tuple[BAITArguments, ModelArguments, DataArguments]:
         """Initialize and validate all arguments"""
         bait_args = BAITArguments()
+        # Override default BAITArguments with scan_args if provided
+        for key in list(vars(bait_args).keys()):
+            if hasattr(self.scan_args, key):
+                setattr(bait_args, key, getattr(self.scan_args, key))
         model_args = ModelArguments()
         data_args = DataArguments()
 
@@ -810,7 +814,8 @@ class BAITWrapper:
 
     def _run_scan(self, model: torch.nn.Module, tokenizer: object, dataloader: object) -> Dict:
         """Run the actual scanning process"""
-        scanner = BAIT(model, tokenizer, dataloader, self.bait_args, logger, device=torch.device('cuda'))
+        device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+        scanner = BAIT(model, tokenizer, dataloader, self.bait_args, logger, device=device)
         start_time = time()
         scan_result = scanner.run()
         end_time = time()
