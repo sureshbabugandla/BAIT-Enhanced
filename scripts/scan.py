@@ -147,10 +147,14 @@ def parse_args():
 
 def validate_args(args):
     """Validate command line arguments"""
-    # Check if directories exist
-    for dir_path in [args.model_zoo_dir, args.data_dir]:
-        if not os.path.exists(dir_path):
-            raise ValueError(f"Directory does not exist: {dir_path}")
+    # Check if model zoo directory exists
+    if not os.path.exists(args.model_zoo_dir):
+        raise ValueError(f"Directory does not exist: {args.model_zoo_dir}")
+    
+    # Ensure data directory exists
+    if not os.path.exists(args.data_dir):
+        logger.info(f"Data directory '{args.data_dir}' does not exist. Creating it...")
+        os.makedirs(args.data_dir, exist_ok=True)
     
     # Create output and cache directories if they don't exist
     os.makedirs(args.output_dir, exist_ok=True)
