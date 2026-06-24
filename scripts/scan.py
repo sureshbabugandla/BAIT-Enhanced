@@ -129,6 +129,17 @@ def parse_args():
         default=20,
         help="Prompt size"
     )
+    parser.add_argument(
+        "--use-wandb",
+        action="store_true",
+        default=False,
+        help="Log metrics to Weights & Biases"
+    )
+    parser.add_argument(
+        "--wandb-project",
+        default="bait-enhanced",
+        help="W&B project name"
+    )
     
     # Map kebab-case command line names to snake_case attribute names parsed by argparse
     args = parser.parse_args()

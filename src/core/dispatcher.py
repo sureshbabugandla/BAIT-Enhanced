@@ -21,6 +21,12 @@ try:
 except ImportError:
     HAS_RAY = False
     ray = None
+try:
+    import wandb
+    HAS_WANDB = True
+except ImportError:
+    HAS_WANDB = False
+    wandb = None
 from transformers import HfArgumentParser
 from loguru import logger
 from src.config.arguments import ScanArguments
@@ -60,6 +66,7 @@ class Dispatcher:
         self._initialize_directories()
         self._initialize_ray()
         self._load_model_configs()
+        self._wandb_active = False
 
     def _initialize_directories(self):
         """Initialize necessary directories"""
@@ -106,10 +113,60 @@ class Dispatcher:
                 logger.info(f"Result for model {model_id} already exists. Skipping...")
         return pending_tasks
 
+    def _init_wandb(self):
+        """Initialize wandb run if enabled and available."""
+        if not getattr(self.scan_args, 'use_wandb', False):
+            return
+        if not HAS_WANDB:
+            logger.warning("wandb not installed. Run `pip install wandb` to enable logging.")
+            return
+        try:
+            wandb.init(
+                project=getattr(self.scan_args, 'wandb_project', 'bait-enhanced'),
+                name=self.scan_args.run_name,
+                config=self._prepare_scan_args_dict(),
+            )
+            self._wandb_active = True
+            logger.info(f"wandb run initialized: {wandb.run.url}")
+        except Exception as e:
+            logger.warning(f"wandb init failed ({e}); continuing without logging.")
+
+    def _log_model_to_wandb(self, model_id: str, model_config: dict):
+        """Log per-model scan result to wandb."""
+        if not self._wandb_active:
+            return
+        result_path = os.path.join(self.run_dir, model_id, "result.json")
+        if not os.path.exists(result_path):
+            return
+        try:
+            with open(result_path) as f:
+                result = json.load(f)
+            wandb.log({
+                "model_id": model_id,
+                "attack": model_config.get("attack", "unknown"),
+                "gt_label": model_config.get("label", "unknown"),
+                "q_score": result.get("q_score", 0.0),
+                "q_std": result.get("q_std", 0.0),
+                "is_backdoor": int(result.get("is_backdoor", False)),
+                "time_taken": result.get("time_taken", 0.0),
+            })
+        except Exception as e:
+            logger.warning(f"wandb log failed for {model_id}: {e}")
+
+    def _finish_wandb(self):
+        """Finish the wandb run."""
+        if self._wandb_active:
+            try:
+                wandb.finish()
+            except Exception:
+                pass
+            self._wandb_active = False
+
     def run(self) -> List[Tuple[str, bool, str]]:
         """Run the scanning process using Ray for parallel execution if available, else sequentially"""
         scan_args_dict = self._prepare_scan_args_dict()
         pending_tasks = self._get_pending_tasks()
+        self._init_wandb()
         
         if HAS_RAY:
             # Launch tasks
@@ -135,12 +192,16 @@ class Dispatcher:
                     logger.error(f"Error scanning model {model_id}: {error}")
                 else:
                     logger.info(f"Completed scanning model {model_id}")
+                    # Log to wandb
+                    cfg = dict(zip(self.model_idxs, self.model_configs)).get(model_id, {})
+                    self._log_model_to_wandb(model_id, cfg)
 
             # Run evaluation if requested
             if self.scan_args.run_eval:
                 Evaluator(self.run_dir).eval()
 
             # Cleanup
+            self._finish_wandb()
             ray.shutdown()
             return results
         else:
@@ -160,10 +221,12 @@ class Dispatcher:
                     logger.error(f"Error scanning model {model_id}: {error}")
                 else:
                     logger.info(f"Completed scanning model {model_id}")
+                    self._log_model_to_wandb(model_id, model_config)
 
             # Run evaluation if requested
             if self.scan_args.run_eval:
                 Evaluator(self.run_dir).eval()
 
+            self._finish_wandb()
             return results
 

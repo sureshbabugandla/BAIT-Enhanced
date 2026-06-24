@@ -100,3 +100,6 @@ class ScanArguments:
     warmup_steps: int = field(default=5, metadata={"help": "Number of warmup steps"})
     full_steps: int = field(default=20, metadata={"help": "Number of full steps"})
     prompt_size: int = field(default=20, metadata={"help": "Prompt size"})
+    # Wandb logging
+    use_wandb: bool = field(default=False, metadata={"help": "Log metrics to Weights & Biases"})
+    wandb_project: str = field(default="bait-enhanced", metadata={"help": "W&B project name"})

@@ -324,7 +324,40 @@ class Evaluator:
         self.report_generator = ReportGenerator(self.df)
         self.report_generator.save_to_markdown(self.results_file)
         logger.info(f"Results saved to {self.results_file}")
+
+        # Log aggregate metrics to wandb if a run is active
+        self._log_to_wandb()
     
+    def _log_to_wandb(self):
+        """Log aggregate evaluation metrics and results table to wandb."""
+        try:
+            import wandb
+            if wandb.run is None:
+                return
+        except ImportError:
+            return
+
+        try:
+            report, error_analysis = self.report_generator.generate_metrics_report()
+            wandb.log({
+                "eval/accuracy": report["accuracy"],
+                "eval/precision": report["precision"],
+                "eval/recall": report["recall"],
+                "eval/f1_score": report["f1_score"],
+                "eval/roc_auc_score": report["roc_auc_score"],
+                "eval/bleu_score": report["bleu_score"],
+                "eval/overhead": report["overhead"],
+                "eval/false_positives": len(error_analysis["false_positives"]),
+                "eval/false_negatives": len(error_analysis["false_negatives"]),
+                "eval/total_models": len(self.df),
+            })
+            # Log full results as a wandb Table
+            if not self.df.empty:
+                wandb.log({"eval/results_table": wandb.Table(dataframe=self.df)})
+            logger.info("Evaluation metrics logged to wandb")
+        except Exception as e:
+            logger.warning(f"wandb eval logging failed: {e}")
+
     def generate_report(self, df: Optional[pd.DataFrame] = None) -> Tuple[Dict[str, float], Dict[str, List[str]]]:
         """Generate report using the report generator."""
         if self.report_generator is None:
